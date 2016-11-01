@@ -1,0 +1,5 @@
+bin/string2GO.py                 # script for STRING function prediction
+dat                              # directory to store data files
+dat/protein.links.txt.gz         # protein network data from STRING
+dat/all_go_knowledge_full.tsv.gz # protein GO annotation from STRING
+dat/full_uniprot_2_string.tsv.gz # uniprot ID to STRING ID mapping
