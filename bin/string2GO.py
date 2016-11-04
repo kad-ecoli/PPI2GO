@@ -1,5 +1,7 @@
 #!/usr/bin/env python
 docstring='''string2GO.py P75994
+string2GO.py -infmt=fasta seq.fasta
+
     predict GO from STRING protein-protein interaction network.
     
     entry    confidence_of_interaction  GO_term   confidence_of_GO
@@ -21,6 +23,11 @@ Confidence Score of GO:0000001
 options:
     -excludeGO=GO:0005515,GO:0005488,GO:0003674,GO:0008150,GO:0005575
         GO terms to be excluded. (default is root and protein binding)
+    -infmt={accession,fasta} input format
+        accession: (default) input is a uniprot accession. this accession
+               will be mapped to string ID using lookup table from STRING
+        fasta: input is a fasta sequence. this sequence will be mapped to
+               string ID by blast
 '''
 
 import sys,os
@@ -30,11 +37,65 @@ from module import obo2csv
 from module.fetch import wget
 obo_url="http://geneontology.org/ontology/go-basic.obo"
 
-datdir=os.path.abspath(os.path.dirname(__file__)+"/../dat")
+bindir=os.path.abspath(os.path.dirname(__file__))
+blastp_exe=os.path.join(bindir,"blastp")
 
+datdir=os.path.abspath(bindir+"/../dat")
+
+protein_sequences=os.path.join(datdir,"protein.sequences.fa")
 full_uniprot_2_string=os.path.join(datdir,"full_uniprot_2_string.tsv.gz")
 protein_links=os.path.join(datdir,"protein.links.txt.gz")
 all_go_knowledge_explicit=os.path.join(datdir,"go_explicit.tsv.gz")
+
+# only when input is fasta sequence
+evalue_cutoff="0.001" # evalue cutoff for blastp
+seqID_cutoff=0.6      # seqID cutoff for blastp
+
+def mapFASTA2string(query="seq.fasta",stringID_list_file='',
+    db=protein_sequences):
+    '''using blastp to search fasta "query" against database "db"
+    If "stringID_list_file" is present, read the string ID mapping from that
+    file instead
+    '''
+    stringID_dict=dict()
+
+    if stringID_list_file and os.path.isfile(stringID_list_file):
+        fp=open(stringID_list_file,'rU')
+        txt=fp.read()
+        fp.close()
+        for line in txt.splitlines():
+            line=line.split()
+            seqID=float(line[1])
+            if seqID>=seqID_cutoff:
+                stringID_dict[line[0]]=seqID
+        return stringID_dict
+
+    fp=open(query,'rU')
+    sequence=''.join([line.strip() for line in fp.read().splitlines() \
+        if not line.startswith('>')])
+    fp.close()
+    seqlen=len(sequence)
+    stdin=">query\n%s\n"%sequence
+
+    cmd="%s -query %s -db %s -evalue %s -outfmt 6"%(
+        blastp_exe,query,db,evalue_cutoff)
+    p=subprocess.Popen(cmd,shell=True,stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE)
+    stdout,stderr=p.communicate(input=stdin)
+
+    txt=''
+    for line in stdout.splitlines():
+        line=line.split()
+        seqID=float(line[2])*0.01*float(line[3])/seqlen
+        txt+="%s\t%.4f\n"%(line[1],seqID)
+        if seqID>=seqID_cutoff:
+            stringID_dict[line[1]]=seqID
+
+    if stringID_list_file:
+        fp=open(stringID_list_file,'w')
+        fp.write(txt)
+        fp.close()
+    return stringID_dict
 
 def uniprot2string(uniprotID="P75994"):
     '''map uniprot ID to a list of matching string ID'''
@@ -44,28 +105,49 @@ def uniprot2string(uniprotID="P75994"):
     if not stdout.strip():
         return ''
     # reformat full_uniprot_2_string so that it only contains two column
-    stringID_list=[line.split()[1] for line in stdout.splitlines()]
-    return stringID_list
+    for line in stdout.splitlines():
+        stringID_dict[line.split()[1]]=1. # perfect match
+    return stringID_dict
 
-def get_PPI_partners(stringID_list=["b1167","4062745","ECDH10B_1216"]):
-    '''get a dict whose key is interaction partners and value is combined_score'''
+def get_PPI_partners(stringID_dict={"b1167":1,"4062745":1,"ECDH10B_1216":1},
+    PPI_partners_file=''):
+    '''
+    get a dict whose key is interaction partners and value is combined_score.
+    if "PPI_partners_file" is present, read the PPI partner from that file
+    instead.
+    '''
     partner_dict=dict()
-    if not stringID_list:
+    if PPI_partners_file and os.path.isfile(PPI_partners_file):
+        fp=open(PPI_partners_file,'rU')
+        txt=fp.read()
+        fp.close()
+        for line in txt.splitlines():
+            line=line.split()
+            PPI_partners_dict[line[0]]=float(line[1])
         return partner_dict
-    cmd='zgrep "\\b%s\\b" %s'%("\\|".join(stringID_list),protein_links)
+
+    if not stringID_dict:
+        return partner_dict
+
+    cmd='zgrep "\\b%s\\b" %s'%("\\|".join(stringID_dict),protein_links)
     p=subprocess.Popen(cmd,shell=True,stdout=subprocess.PIPE)
     stdout,stderr=p.communicate()
     if not stdout.strip():
         return partner_dict
     for line in stdout.splitlines():
         line=line.split()
-        combined_score=float(line[2])/100.
+        combined_score=float(line[2])/1000.
         stringID_0=line[0].split('.')[-1]
         stringID_1=line[1].split('.')[-1]
-        if stringID_0 in stringID_list:
-            partner_dict[stringID_1]=combined_score
-        elif stringID_1 in stringID_list:
-            partner_dict[stringID_0]=combined_score
+        if stringID_0 in stringID_dict:
+            partner_dict[stringID_1]=combined_score*stringID_dict[stringID_0]
+        elif stringID_1 in stringID_dict:
+            partner_dict[stringID_0]=combined_score*stringID_dict[stringID_1]
+    if PPI_partners_file:
+        fp=open(PPI_partners_file,'w')
+        fp.write(''.join(["%s\t%.4f\n"%(stringID,partner_dict[stringID]
+            ) for stringID in partner_dict]))
+        fp.close()
     return partner_dict
 
 def get_partner_terms(partner_dict=dict(),excludeGO='',obo_dict=dict()):
@@ -149,6 +231,8 @@ if __name__=="__main__":
     for arg in sys.argv[1:]:
         if arg.startswith("-excludeGO="):
             excludeGO=arg[len("-excludeGO="):]
+        elif arg.startswith("-infmt="):
+            infmt=arg[len("-infmt="):]
         elif arg.startswith("-"):
             sys.stderr.write("ERROR! Unknown option %s\n"%arg)
             exit()
@@ -165,27 +249,34 @@ if __name__=="__main__":
     fp.close()
     obo_dict=obo2csv.parse_obo_txt(obo_txt)
 
-    stringID_list=uniprot2string(argv[0])
-    sys.stdout.write("mapped to string ID: %s\n"%(','.join(stringID_list)))
+    #### parse string data ####
+    for entry in argv:
+        sys.stdout.write("parsing entry %s\n"%entry)
+        if infmt=="fasta":
+            stringID_list_file=os.path.join(os.path.dirname(argv[0]),"stringID.list")
+            stringID_dict=mapFASTA2string(argv[0],stringID_list_file)
+        else:
+            stringID_dict=uniprot2string(argv[0])
+        sys.stdout.write("mapped to string ID: %s\n"%(','.join(stringID_dict)))
 
-    partner_dict=get_PPI_partners(stringID_list)
-    sys.stdout.write("mapped to %d partners\n"%len(partner_dict))
+        partner_dict=get_PPI_partners(stringID_dict)
+        sys.stdout.write("mapped to %d partners\n"%len(partner_dict))
 
-    partner2GO_dict=get_partner_terms(partner_dict,excludeGO,obo_dict)
-    for Aspect in ["MF","BP","CC"]:
-        sys.stdout.write("Calculating GO-%s from %d partners\n"%(Aspect,
-            len(partner2GO_dict[Aspect[1]])))
-        GOfreq_pred,swGOfreq_pred,gwGOfreq_pred=partner2GOfreq(
-            Aspect[1],partner_dict,partner2GO_dict)
+        partner2GO_dict=get_partner_terms(partner_dict,excludeGO,obo_dict)
+        for Aspect in ["MF","BP","CC"]:
+            sys.stdout.write("Calculating GO-%s from %d partners\n"%(Aspect,
+                len(partner2GO_dict[Aspect[1]])))
+            GOfreq_pred,swGOfreq_pred,gwGOfreq_pred=partner2GOfreq(
+                Aspect[1],partner_dict,partner2GO_dict)
 
-        fp=open("string_GOfreq_"+Aspect,'w')
-        fp.write(GOfreq_pred)
-        fp.close()
+            fp=open("string_GOfreq_"+Aspect,'w')
+            fp.write(GOfreq_pred)
+            fp.close()
 
-        fp=open("string_swGOfreq_"+Aspect,'w')
-        fp.write(swGOfreq_pred)
-        fp.close()
+            fp=open("string_swGOfreq_"+Aspect,'w')
+            fp.write(swGOfreq_pred)
+            fp.close()
 
-        fp=open("string_gwGOfreq_"+Aspect,'w')
-        fp.write(gwGOfreq_pred)
-        fp.close()
+            fp=open("string_gwGOfreq_"+Aspect,'w')
+            fp.write(gwGOfreq_pred)
+            fp.close()
