@@ -98,26 +98,30 @@ cp $outdir/$s/seq.fasta .
 cp -rp $bindir/* .
 
 #### get blastp hits ####
-if [ -s $outdir/$s/string.xml.gz ];then
-    cp $outdir/$s/string.xml.gz .
-    gzip -d string.xml.gz
+if [ -s $outdir/$s/string.msa ];then
+    cp $outdir/$s/string.msa .
 else
     ./blastp -query seq.fasta             \\
          -db $datdir/protein.sequences.fa \\
          -out string.xml                  \\
          -evalue $evalue                  \\
          -outfmt 5
-         #-num_alignments 20000            \\
+    ./blast2msa.py seq.fasta string.xml string.msa
+    gzip string.xml
 fi
-./blast2msa.py seq.fasta string.xml string.msa
-gzip string.xml
+grep -ohP '^>\S+' string.msa|sed 's/^>//g'|./blastdbcmd -entry_batch - \\
+    -db $datdir/protein.sequences.fa -out string.full
 
 #### convert blast hits to GO prediction ####
-$bindir/stringmsa2go.py seq.fasta string.msa
+if [ -s $outdir/$s/go-basic.obo ];then
+    cp $outdir/$s/go-basic.obo .
+fi
+$bindir/stringmsa2go.py seq.fasta string.msa string.full
 
 #### copy result back ####
 cp $tmpdir/string.xml* $outdir/$s/
-cp $tmpdir/string.msa* $outdir/$s/
+cp $tmpdir/string.msa  $outdir/$s/
+cp $tmpdir/string.full $outdir/$s/
 cp $tmpdir/string_*_*  $outdir/$s/
 
 #### clean up ####

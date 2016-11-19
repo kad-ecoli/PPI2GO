@@ -1,5 +1,6 @@
 #!/usr/bin/env python
-docstring='''stringmsa2GO.py seq.fasta string.msa
+docstring='''
+stringmsa2GO.py seq.fasta string.msa
     predict GO from STRING protein-protein interaction network.
     
     protein2    confidence_of_interaction  GO_term   confidence_of_GO
@@ -10,7 +11,11 @@ docstring='''stringmsa2GO.py seq.fasta string.msa
     (confidence of interaction is in [0,1000])
     (confidence of GO is in [1,5])
 
-    all partner2 interacts with protein1 whose seqID to query is 0.9
+    all protein2 interacts with protein1 whose seqID to query is 0.9.
+    seqID(query,protein1)=N_iden/L_query
+
+stringmsa2GO.py seq.fasta string.msa string.full
+    seqID(query,protein1)=N_iden/max{L_query,L_protein1}
 
 Confidence Score of GO:0000001
 [1] GOfreq (number of partners annotated with GO divided by partner number):
@@ -44,12 +49,24 @@ datdir=os.path.abspath(bindir+"/../dat")
 protein_links=os.path.join(datdir,"protein.links.shelve")
 all_go_knowledge_explicit=os.path.join(datdir,"all_go_knowledge_explicit.pkl")
 
-def mapFASTA2string(query="seq.fasta",msa_file='string.msa',
-    seqID_cutoff=0.9):
+def mapFASTA2string(query="seq.fasta",msa_file="string.msa",
+    seqID_cutoff=0.9,full_fasta=''):
     '''parse msa_file, return a dict whose key is stringID and value
-    is seqID
+    is seqID. if full_fasta is not empty, paste the full length fasta
+    sequence file and use it for sequence length caculation
     '''
     stringID_dict=dict()
+
+    ## read full length sequence file ##
+    string_len_dict=dict()
+    fp=open(full_fasta,'rU')
+    for block in fp.read().split('>'):
+        if not block.strip():
+            continue
+        header=block.split()[0]
+        sequence=''.join(block.splitlines()[1:])
+        string_len_dict[header.split()[0]]=len(sequence)
+    fp.close()
 
     ## read query sequence ##
     fp=open(query,'rU')
@@ -66,10 +83,15 @@ def mapFASTA2string(query="seq.fasta",msa_file='string.msa',
         if not line.startswith('>'):
             continue
         line=line[1:].strip().split()
+        header=line[0]
         seqID=line[-1]
         identical_residue_num=float(seqID.split('/')[0])
         aligned_residue_num=float(seqID.split('/')[1])
-        globalID=identical_residue_num/seqlen
+        if header in string_len_dict:
+            globalID=identical_residue_num/max(
+                [seqlen,string_len_dict[header]])
+        else:
+            globalID=identical_residue_num/seqlen
         if globalID>=seqID_cutoff:
             stringID_dict[line[0]]=globalID
 
@@ -222,7 +244,10 @@ if __name__=="__main__":
     obo_dict=obo2csv.parse_obo_txt(obo_txt)
 
     #### parse string data ####
-    stringID_dict=mapFASTA2string(argv[0],argv[1],seqID_cutoff)
+    if len(argv)>2:
+        stringID_dict=mapFASTA2string(argv[0],argv[1],seqID_cutoff,argv[2])
+    else:
+        stringID_dict=mapFASTA2string(argv[0],argv[1],seqID_cutoff)
     sys.stdout.write("mapped to string ID: %s\n"%(','.join(stringID_dict)))
 
     partner_dict=get_PPI_partners(stringID_dict)
