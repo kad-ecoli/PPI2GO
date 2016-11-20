@@ -14,7 +14,9 @@ input file:
             # own folder. Under each folder, there should be a
             # fasta format sequence file called "seq.fasta"
         evalue=0.001
-            # blastp and psiblast evalue cutoff for function transfer
+            # blastp evalue cutoff for function transfer
+        seqID_cutoff=0.9
+            # take blast hit sharing at least specified sequence identity
         Q="default"
             # queue destination
         run="real"
@@ -56,6 +58,7 @@ datdir=os.path.join(os.path.dirname(os.path.abspath(__file__)),"dat")
 seq=''        # fasta file for all sequences
 outdir='.'  # input directory
 evalue=0.001   # blastp evalue cutoff
+seqID_cutoff=0.9 # sequence identity cutoff
 run='real'
 
 config=sys.argv[1] # config file
@@ -109,19 +112,16 @@ else
     ./blast2msa.py seq.fasta string.xml string.msa
     gzip string.xml
 fi
-grep -ohP '^>\S+' string.msa|sed 's/^>//g'|./blastdbcmd -entry_batch - \\
-    -db $datdir/protein.sequences.fa -out string.full
 
 #### convert blast hits to GO prediction ####
 if [ -s $outdir/$s/go-basic.obo ];then
     cp $outdir/$s/go-basic.obo .
 fi
-$bindir/stringmsa2go.py seq.fasta string.msa string.full
+$bindir/stringmsa2go.py -seqID_cutoff=$seqID_cutoff seq.fasta string.msa
 
 #### copy result back ####
 cp $tmpdir/string.xml* $outdir/$s/
 cp $tmpdir/string.msa  $outdir/$s/
-cp $tmpdir/string.full $outdir/$s/
 cp $tmpdir/string_*_*  $outdir/$s/
 
 #### clean up ####
@@ -150,6 +150,7 @@ for s in ss:
         evalue=evalue,
         homoflag=run,
         s=s,
+        seqID_cutoff=seqID_cutoff,
     ))
 
     fp=open(jobname,'w')
