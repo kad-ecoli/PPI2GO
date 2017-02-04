@@ -21,7 +21,7 @@ input file:
             # queue destination
         run="real"
             # if "real", preserve all templates
-            # if "benchmark", remove templates sharing >=0.3 seqID
+            # if "benchmark", remove functional templates sharing >=0.3 seqID
             # if set to a number, remove templates sharing
             # at least specified seqID
 
@@ -55,9 +55,9 @@ bindir=os.path.join(os.path.dirname(os.path.abspath(__file__)),"bin")
 # path to sequence database "lib.fasta" and GO mapping
 datdir=os.path.join(os.path.dirname(os.path.abspath(__file__)),"dat")
 
-seq=''        # fasta file for all sequences
-outdir='.'  # input directory
-evalue=0.001   # blastp evalue cutoff
+seq=''           # fasta file for all sequences
+outdir='.'       # input directory
+evalue=0.001     # blastp evalue cutoff
 seqID_cutoff=0.9 # sequence identity cutoff
 run='real'
 
@@ -98,6 +98,7 @@ mkdir -p $tmpdir
 rm -rf $tmpdir/*
 cd     $tmpdir
 cp $outdir/$s/seq.fasta .
+cp -f $outdir/$s/string_partner.pkl .
 cp -rp $bindir/* .
 
 #### get blastp hits ####
@@ -112,17 +113,36 @@ else
     ./blast2msa.py seq.fasta string.xml string.msa
     gzip string.xml
 fi
+#grep -ohP '>\S+' string.msa | sed 's/>//g'| ./blastdbcmd \\
+    #-db $datdir/protein.sequences.fa -entry_batch - -out string.full
+
+#### map query to PPI partner ####
+# copy protein.links.shelve.bak and protein.links.shelve.dir to current dir
+# to avoid file corruption due to multiple access
+cp -rp $datdir/protein.links.shelve* .
+$bindir/stringID2partner.py -seqID_cutoff=$seqID_cutoff seq.fasta string.msa string_partner.txt
+
+#### filter out homologous partner ####
+cat string_partner.txt| ./blastdbcmd \\
+    -db $datdir/protein.sequences.fa -entry_batch - -out partner.full
+./makeblastdb -dbtype prot -parse_seqids -in partner.full
+./blastp -query seq.fasta -db partner.full -out partner.xml -outfmt 5
+./blast2msa.py seq.fasta partner.xml partner.msa
+gzip partner.xml
 
 #### convert blast hits to GO prediction ####
 if [ -s $outdir/$s/go-basic.obo ];then
     cp $outdir/$s/go-basic.obo .
 fi
-$bindir/stringmsa2go.py -seqID_cutoff=$seqID_cutoff seq.fasta string.msa
+#$bindir/stringID2go.py -seqID_cutoff=$seqID_cutoff seq.fasta string.msa
+$bindir/partner2go.py -homoflag=$homoflag seq.fasta partner.msa string_partner.pkl 
 
 #### copy result back ####
 cp $tmpdir/string.xml* $outdir/$s/
 cp $tmpdir/string.msa  $outdir/$s/
+cp $tmpdir/*.full  $outdir/$s/
 cp $tmpdir/string_*_*  $outdir/$s/
+cp $tmpdir/string_partner.* $outdir/$s/
 
 #### clean up ####
 rm -rf $tmpdir
@@ -137,9 +157,9 @@ for s in ss:
     tag="PIG_"+s+'_'+str(run) # uniq name for job
     jobname=os.path.join(recorddir,tag)
     
-    jobOutput=[os.path.join(datadir,"string_swGOfreq_MF"),
-               os.path.join(datadir,"string_swGOfreq_BP"),
-               os.path.join(datadir,"string_swGOfreq_CC")]
+    jobOutput=[os.path.join(datadir,"string_gwGOfreq_MF"),
+               os.path.join(datadir,"string_gwGOfreq_BP"),
+               os.path.join(datadir,"string_gwGOfreq_CC")]
     
     mod=jobmod.safe_substitute(dict(
         #tmpdir=os.path.join("/tmp",os.getenv("USER"),tag),
